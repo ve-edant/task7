@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Admin{
+  id                String    @id @default(cuid())
+  email             String    @unique
+  password          String
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+}
+
+model User {
+  id                String     @id @default(cuid())
+  email             String     @unique
+  referralCode      String?    @unique
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+  clerkUserId       String     @unique
+  firstName         String?
+  imageUrl          String?
+  isAdmin           Boolean    @default(false)
+  lastName          String?
+  referralsReceived Referral[] @relation("ReferralsReceived")
+  referralsGiven    Referral[] @relation("ReferralsGiven")
+  wallets           Wallet[]
+}
+
+model Wallet {
+  id           String        @id @default(cuid())
+  userId       String
+  name         String
+  balance      Float         @default(0)
+  currency     String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+  user         User          @relation(fields: [userId], references: [id])
+}
+
+model Referral {
+  id         String   @id @default(cuid())
+  referrerId String
+  refereeId  String
+  balance    Float    @default(0)
+  createdAt  DateTime @default(now())
+  referee    User     @relation("ReferralsReceived", fields: [refereeId], references: [id])
+  referrer   User     @relation("ReferralsGiven", fields: [referrerId], references: [id])
+}
+
+model Transaction {
+  id        String          @id @default(cuid())
+  type      TransactionType
+  amount    Float
+  createdAt DateTime        @default(now())
+  walletId  String
+  wallet    Wallet          @relation(fields: [walletId], references: [id])
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  REFERRAL_BONUS
+  INTEREST
+  ADMIN_ADJUSTMENT
+}
