@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
 
     // Find admin by email
     const admin = await prisma.admin.findUnique({
-      where: { email }
+      where: { email },
     });
 
     if (!admin) {
@@ -48,19 +48,23 @@ export async function POST(request: NextRequest) {
 
     // Create response with cookie
     const response = NextResponse.json(
-      { message: "Login successful", admin: { id: admin.id, email: admin.email } },
+      {
+        message: "Login successful",
+        admin: { id: admin.id, email: admin.email },
+      },
       { status: 200 }
     );
 
     response.cookies.set("admin-token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 86400 // 24 hours
+      sameSite: "lax", // "strict" will block cross-site
+      path: "/", // allow all routes
+      maxAge: 60 * 60 * 24, // 24h
+      domain: process.env.COOKIE_DOMAIN || undefined, // e.g. ".mydomain.com"
     });
 
     return response;
-
   } catch (error) {
     console.error("Admin login error:", error);
     return NextResponse.json(
