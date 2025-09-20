@@ -177,7 +177,7 @@ export default function ReferralsPage() {
   const copyReferralLink = async () => {
     if (!userProfile?.referralCode) return;
 
-    const referralLink = `${window.location.origin}/signup?ref=${userProfile.referralCode}`;
+    const referralLink = `${window.location.origin}/sign-up?ref=${userProfile.referralCode}`;
 
     try {
       await navigator.clipboard.writeText(referralLink);

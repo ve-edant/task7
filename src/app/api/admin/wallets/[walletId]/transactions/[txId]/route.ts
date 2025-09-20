@@ -3,10 +3,10 @@ import { prisma } from "@/lib/prisma";
 
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { walletId: string; txId: string } }
+  { params }: { params: Promise<{ walletId: string; txId: string }> }
 ) {
   try {
-    const { walletId, txId } = params;
+    const { walletId, txId } = await params;
 
     const tx = await prisma.transaction.findUnique({ where: { id: txId } });
     if (!tx) return NextResponse.json({ error: "Transaction not found" }, { status: 404 });

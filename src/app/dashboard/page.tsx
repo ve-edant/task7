@@ -48,6 +48,23 @@ export default function UserDashboard() {
   const [loading, setLoading] = useState(true);
   const [pricesLoading, setPricesLoading] = useState(true);
 
+  useEffect(() => {
+    const ref = localStorage.getItem("referralCode");
+    console.log("Referral code from localStorage:", ref);
+    
+    if (ref) {
+      fetch("/api/check-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ referralCode: ref }),
+      }).then(() => {
+        localStorage.removeItem("referralCode"); // cleanup
+      });
+    } else {
+      fetch("/api/check-user", { method: "POST" }); // ensure user is in DB
+    }
+  }, []);
+
   // Fetch user profile data
   const fetchUserProfile = async () => {
     try {
