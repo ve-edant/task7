@@ -42,6 +42,8 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
     return;
   }
 
+  if (isAdminApiRoute(req)) return NextResponse.next();
+
   // Protect everything else with Clerk
   const { userId, redirectToSignIn } = await auth();
 
