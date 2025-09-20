@@ -106,7 +106,7 @@ export default function AdminDashboard() {
   const formatCurrency = (amount: number, currency: string) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
-      currency: currency || 'USD',
+      currency: 'USD',
     }).format(amount);
   };
 
@@ -219,7 +219,7 @@ export default function AdminDashboard() {
             ) : (
               <ul className="divide-y divide-gray-200">
                 {users.map((user) => (
-                  <li key={user.id} onClick={() => router.push(`/admin/users/${user.id}`)} className="px-6 py-4">
+                  <li key={user.id} onClick={() => router.push(`/admin/users/${user.id}`)} className="px-6 py-4 cursor-pointer hover:bg-gray-50">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center">
                         {user.imageUrl ? (
