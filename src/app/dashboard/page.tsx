@@ -1,10 +1,16 @@
-//app/src/dashboard/page.tsx
-'use client';
-
-import { useState, useEffect } from 'react';
-import { Wallet, TrendingUp, TrendingDown, Users, DollarSign, ArrowRight, Loader2 } from 'lucide-react';
-import Link from 'next/link';
-import { useUser } from '@clerk/nextjs';
+"use client";
+import { useState, useEffect } from "react";
+import {
+  Wallet,
+  TrendingUp,
+  TrendingDown,
+  Users,
+  DollarSign,
+  ArrowRight,
+  Loader2,
+} from "lucide-react";
+import Link from "next/link";
+import { useUser } from "@clerk/nextjs";
 
 interface Wallet {
   id: string;
@@ -17,7 +23,12 @@ interface Wallet {
 
 interface Transaction {
   id: string;
-  type: 'DEPOSIT' | 'WITHDRAWAL' | 'REFERRAL_BONUS' | 'INTEREST' | 'ADMIN_ADJUSTMENT';
+  type:
+    | "DEPOSIT"
+    | "WITHDRAWAL"
+    | "REFERRAL_BONUS"
+    | "INTEREST"
+    | "ADMIN_ADJUSTMENT";
   amount: number;
   createdAt: string;
   walletId: string;
@@ -42,38 +53,60 @@ interface CryptoPrice {
 }
 
 export default function UserDashboard() {
-  const { user: clerkUser } = useUser();
+  const { user: clerkUser, isLoaded: isClerkLoaded, isSignedIn } = useUser();
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [cryptoPrices, setCryptoPrices] = useState<CryptoPrice>({});
   const [loading, setLoading] = useState(true);
   const [pricesLoading, setPricesLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
+  // Handle referral code and user creation
   useEffect(() => {
-    const ref = localStorage.getItem("referralCode");
-    console.log("Referral code from localStorage:", ref);
-    
-    if (ref) {
-      fetch("/api/check-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ referralCode: ref }),
-      }).then(() => {
-        localStorage.removeItem("referralCode"); // cleanup
-      });
-    } else {
-      fetch("/api/check-user", { method: "POST" }); // ensure user is in DB
-    }
-  }, []);
+    // Only run when Clerk is loaded and user is signed in
+    if (!isClerkLoaded || !isSignedIn) return;
+
+    const handleUserSetup = async () => {
+      try {
+        const ref = localStorage.getItem("referralCode");
+        console.log("Referral code from localStorage:", ref);
+
+        if (ref) {
+          await fetch("/api/check-user", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ referralCode: ref }),
+          });
+          localStorage.removeItem("referralCode"); // cleanup
+        } else {
+          await fetch("/api/check-user", { method: "POST" }); // ensure user is in DB
+        }
+      } catch (error) {
+        console.error("Error in user setup:", error);
+      }
+    };
+
+    handleUserSetup();
+  }, [isClerkLoaded, isSignedIn]);
 
   // Fetch user profile data
   const fetchUserProfile = async () => {
     try {
-      const response = await fetch('/api/users/profile');
-      if (!response.ok) throw new Error('Failed to fetch profile');
+      setError(null);
+      const response = await fetch("/api/users/profile");
+
+      if (!response.ok) {
+        throw new Error(
+          `Failed to fetch profile: ${response.status} ${response.statusText}`
+        );
+      }
+
       const data = await response.json();
       setUserProfile(data.user);
     } catch (error) {
-      console.error('Error fetching user profile:', error);
+      console.error("Error fetching user profile:", error);
+      setError(
+        error instanceof Error ? error.message : "Failed to fetch profile"
+      );
     } finally {
       setLoading(false);
     }
@@ -89,28 +122,35 @@ export default function UserDashboard() {
     try {
       const uniqueCurrencies = [...new Set(currencies)];
       const response = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${uniqueCurrencies.join(',')}&vs_currencies=usd`
+        `https://api.coingecko.com/api/v3/simple/price?ids=${uniqueCurrencies.join(
+          ","
+        )}&vs_currencies=usd`
       );
-      
-      if (!response.ok) throw new Error('Failed to fetch crypto prices');
+
+      if (!response.ok) throw new Error("Failed to fetch crypto prices");
       const prices = await response.json();
       setCryptoPrices(prices);
     } catch (error) {
-      console.error('Error fetching crypto prices:', error);
+      console.error("Error fetching crypto prices:", error);
     } finally {
       setPricesLoading(false);
     }
   };
 
+  // Fetch profile when Clerk user is ready
   useEffect(() => {
-    if (clerkUser) {
+    if (isClerkLoaded && isSignedIn && clerkUser) {
       fetchUserProfile();
+    } else if (isClerkLoaded && !isSignedIn) {
+      setLoading(false);
+      setError("User not signed in");
     }
-  }, [clerkUser]);
+  }, [isClerkLoaded, isSignedIn, clerkUser]);
 
+  // Fetch crypto prices when profile is loaded
   useEffect(() => {
     if (userProfile?.wallets) {
-      const currencies = userProfile.wallets.map(wallet => wallet.currency);
+      const currencies = userProfile.wallets.map((wallet) => wallet.currency);
       fetchCryptoPrices(currencies);
     }
   }, [userProfile]);
@@ -128,41 +168,43 @@ export default function UserDashboard() {
 
     const totalBalance = userProfile.wallets.reduce((sum, wallet) => {
       const price = cryptoPrices[wallet.currency]?.usd || 0;
-      return sum + (wallet.balance * price);
+      return sum + wallet.balance * price;
     }, 0);
 
     const transactions = userProfile.totalTransactions || [];
-    
+
     const totalDeposits = transactions
-      .filter(tx => tx.type === 'DEPOSIT')
+      .filter((tx) => tx.type === "DEPOSIT")
       .reduce((sum, tx) => {
-        const wallet = userProfile.wallets.find(w => w.id === tx.walletId);
-        const price = wallet ? (cryptoPrices[wallet.currency]?.usd || 0) : 0;
-        return sum + (tx.amount * price);
+        const wallet = userProfile.wallets.find((w) => w.id === tx.walletId);
+        const price = wallet ? cryptoPrices[wallet.currency]?.usd || 0 : 0;
+        return sum + tx.amount * price;
       }, 0);
 
     const totalWithdrawals = transactions
-      .filter(tx => tx.type === 'WITHDRAWAL')
+      .filter((tx) => tx.type === "WITHDRAWAL")
       .reduce((sum, tx) => {
-        const wallet = userProfile.wallets.find(w => w.id === tx.walletId);
-        const price = wallet ? (cryptoPrices[wallet.currency]?.usd || 0) : 0;
-        return sum + (tx.amount * price);
+        const wallet = userProfile.wallets.find((w) => w.id === tx.walletId);
+        const price = wallet ? cryptoPrices[wallet.currency]?.usd || 0 : 0;
+        return sum + tx.amount * price;
       }, 0);
 
     const totalIncome = transactions
-      .filter(tx => ['REFERRAL_BONUS', 'INTEREST'].includes(tx.type))
+      .filter((tx) => ["REFERRAL_BONUS", "INTEREST"].includes(tx.type))
       .reduce((sum, tx) => {
-        const wallet = userProfile.wallets.find(w => w.id === tx.walletId);
-        const price = wallet ? (cryptoPrices[wallet.currency]?.usd || 0) : 0;
-        return sum + (tx.amount * price);
+        const wallet = userProfile.wallets.find((w) => w.id === tx.walletId);
+        const price = wallet ? cryptoPrices[wallet.currency]?.usd || 0 : 0;
+        return sum + tx.amount * price;
       }, 0);
 
     return { totalBalance, totalDeposits, totalWithdrawals, totalIncome };
   };
 
-  const { totalBalance, totalDeposits, totalWithdrawals, totalIncome } = calculateTotals();
+  const { totalBalance, totalDeposits, totalWithdrawals, totalIncome } =
+    calculateTotals();
 
-  if (loading) {
+  // Loading state - wait for both Clerk and profile data
+  if (!isClerkLoaded || loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="flex items-center space-x-2">
@@ -173,12 +215,57 @@ export default function UserDashboard() {
     );
   }
 
-  if (!userProfile) {
+  // Error state
+  if (error || !isSignedIn) {
+    setError(null);
+    setLoading(true);
+    fetchUserProfile();
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Profile Not Found</h2>
-          <p className="text-gray-600">Unable to load your profile information.</p>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            Unable to Load Dashboard
+          </h2>
+          <p className="text-gray-600 mb-4">
+            {error || "Please sign in to view your dashboard."}
+          </p>
+          <button
+            onClick={() => {
+              setError(null);
+              setLoading(true);
+              fetchUserProfile();
+            }}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Profile not found state
+  if (!userProfile) {
+    setLoading(true);
+    fetchUserProfile();
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            Profile Not Found
+          </h2>
+          <p className="text-gray-600 mb-4">
+            Unable to load your profile information.
+          </p>
+          <button
+            onClick={() => {
+              setLoading(true);
+              fetchUserProfile();
+            }}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -190,11 +277,9 @@ export default function UserDashboard() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">
-            Welcome back, {userProfile.firstName || 'User'}!
+            Welcome back, {userProfile.firstName || "User"}!
           </h1>
-          <p className="text-gray-600 mt-2">
-            Here's your financial overview
-          </p>
+          <p className="text-gray-600 mt-2">Here's your financial overview</p>
         </div>
 
         {/* Dashboard Cards */}
@@ -207,11 +292,13 @@ export default function UserDashboard() {
                   <div className="p-2 bg-blue-100 rounded-lg">
                     <Wallet className="h-6 w-6 text-blue-600" />
                   </div>
-                  <h3 className="ml-3 text-lg font-semibold text-gray-900">Wallets</h3>
+                  <h3 className="ml-3 text-lg font-semibold text-gray-900">
+                    Wallets
+                  </h3>
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-              
+
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Balance</span>
@@ -219,13 +306,17 @@ export default function UserDashboard() {
                     {pricesLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      `$${totalBalance.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                      `$${totalBalance.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })}`
                     )}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Active Wallets</span>
-                  <span className="font-medium text-black">{userProfile.wallets.length}</span>
+                  <span className="font-medium text-black">
+                    {userProfile.wallets.length}
+                  </span>
                 </div>
               </div>
             </div>
@@ -239,11 +330,13 @@ export default function UserDashboard() {
                   <div className="p-2 bg-green-100 rounded-lg">
                     <TrendingUp className="h-6 w-6 text-green-600" />
                   </div>
-                  <h3 className="ml-3 text-lg font-semibold text-gray-900">Deposits</h3>
+                  <h3 className="ml-3 text-lg font-semibold text-gray-900">
+                    Deposits
+                  </h3>
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-              
+
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Deposited</span>
@@ -251,14 +344,18 @@ export default function UserDashboard() {
                     {pricesLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      `$${totalDeposits.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                      `$${totalDeposits.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })}`
                     )}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Transactions</span>
                   <span className="font-medium text-black">
-                    {userProfile.totalTransactions?.filter(tx => tx.type === 'DEPOSIT').length || 0}
+                    {userProfile.totalTransactions?.filter(
+                      (tx) => tx.type === "DEPOSIT"
+                    ).length || 0}
                   </span>
                 </div>
               </div>
@@ -273,11 +370,13 @@ export default function UserDashboard() {
                   <div className="p-2 bg-purple-100 rounded-lg">
                     <DollarSign className="h-6 w-6 text-purple-600" />
                   </div>
-                  <h3 className="ml-3 text-lg font-semibold text-gray-900">Total Income</h3>
+                  <h3 className="ml-3 text-lg font-semibold text-gray-900">
+                    Total Income
+                  </h3>
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-              
+
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Earnings</span>
@@ -285,13 +384,17 @@ export default function UserDashboard() {
                     {pricesLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      `$${totalIncome.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                      `$${totalIncome.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })}`
                     )}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Sources</span>
-                  <span className="font-medium text-black">Referrals & Interest</span>
+                  <span className="font-medium text-black">
+                    Referrals & Interest
+                  </span>
                 </div>
               </div>
             </div>
@@ -305,11 +408,13 @@ export default function UserDashboard() {
                   <div className="p-2 bg-red-100 rounded-lg">
                     <TrendingDown className="h-6 w-6 text-red-600" />
                   </div>
-                  <h3 className="ml-3 text-lg font-semibold text-gray-900">Withdrawals</h3>
+                  <h3 className="ml-3 text-lg font-semibold text-gray-900">
+                    Withdrawals
+                  </h3>
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-              
+
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Withdrawn</span>
@@ -317,14 +422,18 @@ export default function UserDashboard() {
                     {pricesLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
-                      `$${totalWithdrawals.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                      `$${totalWithdrawals.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })}`
                     )}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Transactions</span>
                   <span className="font-medium text-black">
-                    {userProfile.totalTransactions?.filter(tx => tx.type === 'WITHDRAWAL').length || 0}
+                    {userProfile.totalTransactions?.filter(
+                      (tx) => tx.type === "WITHDRAWAL"
+                    ).length || 0}
                   </span>
                 </div>
               </div>
@@ -339,11 +448,13 @@ export default function UserDashboard() {
                   <div className="p-2 bg-orange-100 rounded-lg">
                     <Users className="h-6 w-6 text-orange-600" />
                   </div>
-                  <h3 className="ml-3 text-lg font-semibold text-gray-900">Referrals</h3>
+                  <h3 className="ml-3 text-lg font-semibold text-gray-900">
+                    Referrals
+                  </h3>
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-              
+
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Referred Users</span>
@@ -354,7 +465,7 @@ export default function UserDashboard() {
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Referral Code</span>
                   <span className="font-medium font-mono text-sm text-black">
-                    {userProfile.referralCode || 'Not Set'}
+                    {userProfile.referralCode || "Not Set"}
                   </span>
                 </div>
               </div>
@@ -365,72 +476,103 @@ export default function UserDashboard() {
         {/* Quick Stats */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Recent Activity
+            </h3>
             <div className="space-y-3">
-              {userProfile.totalTransactions?.slice(0, 3).map((transaction, index) => {
-                const wallet = userProfile.wallets.find(w => w.id === transaction.walletId);
-                const price = wallet ? (cryptoPrices[wallet.currency]?.usd || 0) : 0;
-                const usdValue = transaction.amount * price;
-                
-                return (
-                  <div key={transaction.id} className="flex items-center justify-between py-2">
-                    <div className="flex items-center">
-                      <div className={`p-2 rounded-lg ${
-                        transaction.type === 'DEPOSIT' ? 'bg-green-100' :
-                        transaction.type === 'WITHDRAWAL' ? 'bg-red-100' :
-                        'bg-blue-100'
-                      }`}>
-                        {transaction.type === 'DEPOSIT' ? (
-                          <TrendingUp className="h-4 w-4 text-green-600" />
-                        ) : transaction.type === 'WITHDRAWAL' ? (
-                          <TrendingDown className="h-4 w-4 text-red-600" />
-                        ) : (
-                          <DollarSign className="h-4 w-4 text-blue-600" />
-                        )}
+              {userProfile.totalTransactions
+                ?.slice(0, 3)
+                .map((transaction, index) => {
+                  const wallet = userProfile.wallets.find(
+                    (w) => w.id === transaction.walletId
+                  );
+                  const price = wallet
+                    ? cryptoPrices[wallet.currency]?.usd || 0
+                    : 0;
+                  const usdValue = transaction.amount * price;
+
+                  return (
+                    <div
+                      key={transaction.id}
+                      className="flex items-center justify-between py-2"
+                    >
+                      <div className="flex items-center">
+                        <div
+                          className={`p-2 rounded-lg ${
+                            transaction.type === "DEPOSIT"
+                              ? "bg-green-100"
+                              : transaction.type === "WITHDRAWAL"
+                              ? "bg-red-100"
+                              : "bg-blue-100"
+                          }`}
+                        >
+                          {transaction.type === "DEPOSIT" ? (
+                            <TrendingUp className="h-4 w-4 text-green-600" />
+                          ) : transaction.type === "WITHDRAWAL" ? (
+                            <TrendingDown className="h-4 w-4 text-red-600" />
+                          ) : (
+                            <DollarSign className="h-4 w-4 text-blue-600" />
+                          )}
+                        </div>
+                        <div className="ml-3">
+                          <p className="text-sm font-medium text-gray-900">
+                            {transaction.type
+                              .replace("_", " ")
+                              .toLowerCase()
+                              .replace(/\b\w/g, (l) => l.toUpperCase())}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {new Date(
+                              transaction.createdAt
+                            ).toLocaleDateString()}
+                          </p>
+                        </div>
                       </div>
-                      <div className="ml-3">
+                      <div className="text-right">
                         <p className="text-sm font-medium text-gray-900">
-                          {transaction.type.replace('_', ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase())}
+                          {transaction.amount} {wallet?.currency?.toUpperCase()}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {new Date(transaction.createdAt).toLocaleDateString()}
+                          ${usdValue.toFixed(2)}
                         </p>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-gray-900">
-                        {transaction.amount} {wallet?.currency?.toUpperCase()}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        ${usdValue.toFixed(2)}
-                      </p>
-                    </div>
-                  </div>
-                );
-              })}
-              
-              {(!userProfile.totalTransactions || userProfile.totalTransactions.length === 0) && (
-                <p className="text-gray-500 text-center py-4">No recent transactions</p>
+                  );
+                })}
+
+              {(!userProfile.totalTransactions ||
+                userProfile.totalTransactions.length === 0) && (
+                <p className="text-gray-500 text-center py-4">
+                  No recent transactions
+                </p>
               )}
             </div>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">Account Summary</h3>
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Account Summary
+            </h3>
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <span className="text-gray-600">Member Since</span>
                 <span className="font-medium text-black">
-                  {new Date(userProfile.referralsReceived?.[0]?.createdAt || Date.now()).toLocaleDateString()}
+                  {new Date(
+                    userProfile.referralsReceived?.[0]?.createdAt || Date.now()
+                  ).toLocaleDateString()}
                 </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-600">Total Wallets</span>
-                <span className="font-medium text-black">{userProfile.wallets.length}</span>
+                <span className="font-medium text-black">
+                  {userProfile.wallets.length}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-600">Total Transactions</span>
-                <span className="font-medium text-black">{userProfile.totalTransactions?.length || 0}</span>
+                <span className="font-medium text-black">
+                  {userProfile.totalTransactions?.length || 0}
+                </span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-gray-600">Portfolio Value</span>
@@ -438,7 +580,9 @@ export default function UserDashboard() {
                   {pricesLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    `$${totalBalance.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+                    `$${totalBalance.toLocaleString("en-US", {
+                      maximumFractionDigits: 2,
+                    })}`
                   )}
                 </span>
               </div>
