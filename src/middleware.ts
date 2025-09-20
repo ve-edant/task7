@@ -10,10 +10,15 @@ const isPublicRoute = createRouteMatcher([
   "/api/admin/login",  
   "/api/admin/logout",
   "/api/referrals/validate",
+  
 ]);
 
 const isAdminRoute = createRouteMatcher([
   "/admin/dashboard(.*)",
+]);
+
+const isAdminApiRoute = createRouteMatcher([
+  "/api/admin(.*)",
 ]);
 
 export default clerkMiddleware(async (auth, req: NextRequest) => {
