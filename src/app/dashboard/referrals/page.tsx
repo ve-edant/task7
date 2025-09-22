@@ -379,7 +379,7 @@ export default function ReferralsPage() {
               </label>
               <div className="flex items-center space-x-2">
                 <div className="flex-1 px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg text-sm break-all">
-                  {`${window.location.origin}/signup?ref=${userProfile.referralCode}`}
+                  {`${window.location.origin}/referral/sign-up?ref=${userProfile.referralCode}`}
                 </div>
                 <button
                   onClick={copyReferralLink}

@@ -1,6 +1,5 @@
 // src/app/api/users/profile/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { getCurrentUser, requireAuth } from '@/lib/auth-utils';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@clerk/nextjs/server';
 
@@ -35,7 +34,8 @@ export async function GET(request: NextRequest) {
                 createdAt: true
               }
             }
-          }
+          },
+          orderBy: { createdAt: 'desc' }
         },
         referralsReceived: {
           include: {
@@ -58,25 +58,45 @@ export async function GET(request: NextRequest) {
     }
 
     // Flatten all transactions from all wallets for easier processing
-    const totalTransactions = user.wallets.flatMap(wallet => 
+    const walletTransactions = user.wallets.flatMap(wallet => 
       wallet.transactions.map(transaction => ({
         ...transaction,
-        walletId: wallet.id
+        wallet: {
+          id: wallet.id,
+          name: wallet.name,
+          currency: wallet.currency
+        }
       }))
-    ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    );
 
-    // Calculate additional statistics
+    // Create mock REFERRAL_BONUS transactions from referralsGiven
+    const referralBonusTransactions = user.referralsGiven.map(referral => ({
+      id: `referral-${referral.id}`,
+      type: 'REFERRAL_BONUS' as const,
+      amount: referral.balance,
+      createdAt: referral.createdAt,
+      walletId: 'virtual', // Virtual wallet for referral bonuses
+      wallet: {
+        id: 'virtual',
+        name: 'Referral Rewards',
+        currency: 'usd' // Referral bonuses are stored in USD equivalent
+      }
+    }));
+
+    // Combine and sort all transactions
+    const totalTransactions = [...walletTransactions, ...referralBonusTransactions]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Calculate statistics
     const totalBalance = user.wallets.reduce((sum, wallet) => sum + wallet.balance, 0);
-    const totalDeposits = totalTransactions
+    const totalDeposits = walletTransactions
       .filter(tx => tx.type === 'DEPOSIT')
       .reduce((sum, tx) => sum + tx.amount, 0);
-    const totalWithdrawals = totalTransactions
+    const totalWithdrawals = walletTransactions
       .filter(tx => tx.type === 'WITHDRAWAL')
       .reduce((sum, tx) => sum + tx.amount, 0);
-    const totalReferralBonus = totalTransactions
-      .filter(tx => tx.type === 'REFERRAL_BONUS')
-      .reduce((sum, tx) => sum + tx.amount, 0);
-    const totalInterest = totalTransactions
+    const totalReferralBonus = user.referralsGiven.reduce((sum, ref) => sum + ref.balance, 0);
+    const totalInterest = walletTransactions
       .filter(tx => tx.type === 'INTEREST')
       .reduce((sum, tx) => sum + tx.amount, 0);
 
@@ -119,18 +139,62 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { firstName, lastName, referralCode } = body;
 
+    // Validate referral code if provided
+    if (referralCode !== undefined) {
+      if (referralCode && referralCode.trim()) {
+        // Check if referral code already exists (excluding current user)
+        const existingUser = await prisma.user.findFirst({
+          where: { 
+            referralCode: referralCode.trim(),
+            clerkUserId: { not: userId }
+          }
+        });
+        
+        if (existingUser) {
+          return NextResponse.json(
+            { error: 'Referral code already exists' },
+            { status: 400 }
+          );
+        }
+      }
+    }
+
     // Update user profile
     const updatedUser = await prisma.user.update({
       where: { clerkUserId: userId },
       data: {
         ...(firstName !== undefined && { firstName }),
         ...(lastName !== undefined && { lastName }),
-        ...(referralCode !== undefined && { referralCode }),
+        ...(referralCode !== undefined && { referralCode: referralCode?.trim() || null }),
       },
       include: {
         wallets: true,
-        referralsGiven: true,
-        referralsReceived: true
+        referralsGiven: {
+          include: {
+            referee: {
+              select: {
+                id: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+                createdAt: true
+              }
+            }
+          }
+        },
+        referralsReceived: {
+          include: {
+            referrer: {
+              select: {
+                id: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+                createdAt: true
+              }
+            }
+          }
+        }
       }
     });
 

@@ -1,60 +1,65 @@
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
-import { NextRequest, NextResponse } from "next/server";
+// src/middleware.ts
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+import { NextRequest, NextResponse } from 'next/server';
 
+// Protected routes
+const isProtectedRoute = createRouteMatcher([
+  '/dashboard(.*)',
+  '/admin(.*)',
+]);
+
+// Public routes
 const isPublicRoute = createRouteMatcher([
-  "/",                 
-  "/sign-in(.*)",      
-  "/sign-up(.*)",      
-  "/api/webhooks/clerk",
-  "/admin/login",      
-  "/api/admin/login",  
-  "/api/admin/logout",
-  "/api/referrals/validate",
-  
-]);
-
-const isAdminRoute = createRouteMatcher([
-  "/admin/dashboard(.*)",
-]);
-
-const isAdminApiRoute = createRouteMatcher([
-  "/api/admin(.*)",
+  '/',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+  '/referral/sign-up(.*)',
+  '/api/referrals/validate',
+  '/api/check-user',
 ]);
 
 export default clerkMiddleware(async (auth, req: NextRequest) => {
-  console.log("Middleware running for:", req.nextUrl.pathname);
+  const { userId } = await auth(); // ✅ await here
+  const url = req.nextUrl.clone();
 
-  // Handle admin routes
-  if (isAdminRoute(req)) {
-    const token = req.cookies.get("admin-token")?.value;
+  // Handle referral links
+  if (url.pathname === '/sign-up' && url.searchParams.has('ref')) {
+    const referralCode = url.searchParams.get('ref');
+    url.pathname = '/referral/sign-up';
+    url.searchParams.set('ref', referralCode!);
+    return NextResponse.redirect(url);
+  }
 
-    if (!token) {
-      return NextResponse.redirect(new URL("/admin/login", req.url));
+  // ✅ Let public routes be accessible always
+  if (isPublicRoute(req)) {
+    // If user is logged in and hits sign-in/up, redirect to dashboard
+    if (
+      userId &&
+      (url.pathname.startsWith('/sign-in') ||
+        url.pathname.startsWith('/sign-up') ||
+        url.pathname.startsWith('/referral/sign-up'))
+    ) {
+      url.pathname = '/dashboard';
+      url.search = '';
+      return NextResponse.redirect(url);
     }
 
-    // Instead of verifying here, just forward to /admin/dashboard
-    // and do JWT verification in that route/server component
     return NextResponse.next();
   }
 
-  // Skip protection for public routes
-  if (isPublicRoute(req)) {
-    return;
+  // ✅ Protect private routes
+  if (isProtectedRoute(req) && !userId) {
+    url.pathname = '/sign-in';
+    return NextResponse.redirect(url);
   }
 
-  if (isAdminApiRoute(req)) return NextResponse.next();
-
-  // Protect everything else with Clerk
-  const { userId, redirectToSignIn } = await auth();
-
-  if (!userId) {
-    return redirectToSignIn({ returnBackUrl: req.url });
-  }
+  return NextResponse.next();
 });
 
 export const config = {
   matcher: [
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-    "/(api|trpc)(.*)",
+    // Skip Next.js internals and static files
+    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    '/(api|trpc)(.*)',
   ],
 };
