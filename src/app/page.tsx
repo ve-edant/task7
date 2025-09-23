@@ -2,10 +2,19 @@
 
 import React, { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useUser } from "@clerk/nextjs"; // or your auth provider hook
 
 const PremiumCryptoLanding: React.FC = () => {
   const router = useRouter();
   const particlesRef = useRef<HTMLDivElement>(null);
+  const { isLoaded, isSignedIn } = useUser(); // Clerk example
+
+  // Redirect if user is signed in
+  useEffect(() => {
+    if (isLoaded && isSignedIn) {
+      router.replace("/dashboard");
+    }
+  }, [isLoaded, isSignedIn, router]);
 
   // Particle system
   useEffect(() => {

@@ -221,7 +221,7 @@ export default function WithdrawalsPage() {
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">Total Withdrawals (USD)</p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {pricesLoading ? (
+                  {pricesLoading && withdrawals.length > 0 ? (
                     <Loader2 className="h-6 w-6 animate-spin" />
                   ) : (
                     `${totalUsdValue.toLocaleString('en-US', { maximumFractionDigits: 2 })}`

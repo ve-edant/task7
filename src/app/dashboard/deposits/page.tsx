@@ -10,6 +10,8 @@ import {
   Search,
   Loader2,
   Wallet,
+  Plus,
+  AlertCircle,
 } from "lucide-react";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
@@ -34,6 +36,9 @@ interface CryptoPrice {
   };
 }
 
+// Minimum deposit amount in USD
+const MINIMUM_DEPOSIT_USD = 100;
+
 export default function DepositsPage() {
   const { user } = useUser();
   const [deposits, setDeposits] = useState<Transaction[]>([]);
@@ -45,11 +50,22 @@ export default function DepositsPage() {
   const [selectedWallet, setSelectedWallet] = useState("all");
   const [dateRange, setDateRange] = useState("all");
 
+  // New state for deposit form
+  const [showDepositForm, setShowDepositForm] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("");
+  const [selectedDepositWallet, setSelectedDepositWallet] = useState("");
+  const [depositLoading, setDepositLoading] = useState(false);
+  const [depositError, setDepositError] = useState("");
+  const [userWallets, setUserWallets] = useState<any[]>([]);
+
   const fetchUserProfile = async () => {
     try {
       const response = await fetch("/api/users/profile");
       if (!response.ok) throw new Error("Failed to fetch profile");
       const data = await response.json();
+
+      // Store user wallets for deposit form
+      setUserWallets(data.user.wallets);
 
       // Extract all deposit transactions with wallet info
       const allDeposits = data.user.wallets
@@ -58,7 +74,7 @@ export default function DepositsPage() {
             .filter(
               (tx: { type: TransactionType }) =>
                 tx.type === TransactionType.DEPOSIT
-            ) // ✅
+            )
             .map((tx: any) => ({
               ...tx,
               wallet: {
@@ -84,7 +100,7 @@ export default function DepositsPage() {
 
   const fetchCryptoPrices = async (currencies: string[]) => {
     if (currencies.length === 0) {
-      setPricesLoading(false);
+      setPricesLoading(false); // ✅ release loader
       return;
     }
 
@@ -102,7 +118,91 @@ export default function DepositsPage() {
     } catch (error) {
       console.error("Error fetching crypto prices:", error);
     } finally {
-      setPricesLoading(false);
+      setPricesLoading(false); // ✅ always release loader
+    }
+  };
+
+  // Validate minimum deposit amount
+  const validateDepositAmount = (
+    amount: string,
+    currency: string
+  ): string | null => {
+    const numAmount = parseFloat(amount);
+
+    if (!numAmount || numAmount <= 0) {
+      return "Please enter a valid amount";
+    }
+
+    const cryptoPrice = cryptoPrices[currency]?.usd || 0;
+    if (cryptoPrice === 0) {
+      return "Unable to fetch current price. Please try again.";
+    }
+
+    const usdValue = numAmount * cryptoPrice;
+    if (usdValue < MINIMUM_DEPOSIT_USD) {
+      const minCryptoAmount = MINIMUM_DEPOSIT_USD / cryptoPrice;
+      return `Minimum deposit is $${MINIMUM_DEPOSIT_USD} USD (≈ ${minCryptoAmount.toFixed(
+        6
+      )} ${currency.toUpperCase()})`;
+    }
+
+    return null;
+  };
+
+  // Handle deposit submission
+  const handleDeposit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setDepositError("");
+    setDepositLoading(true);
+
+    try {
+      const selectedWallet = userWallets.find(
+        (w) => w.id === selectedDepositWallet
+      );
+      if (!selectedWallet) {
+        setDepositError("Please select a wallet");
+        return;
+      }
+
+      // Validate minimum amount
+      const validationError = validateDepositAmount(
+        depositAmount,
+        selectedWallet.currency
+      );
+      if (validationError) {
+        setDepositError(validationError);
+        return;
+      }
+
+      // Make API call to process deposit
+      const response = await fetch("/api/transactions/deposit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          walletId: selectedDepositWallet,
+          amount: parseFloat(depositAmount),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Failed to process deposit");
+      }
+
+      // Reset form and refresh data
+      setDepositAmount("");
+      setSelectedDepositWallet("");
+      setShowDepositForm(false);
+      fetchUserProfile(); // Refresh the deposits list
+    } catch (error) {
+      console.error("Error processing deposit:", error);
+      setDepositError(
+        error instanceof Error ? error.message : "Failed to process deposit"
+      );
+    } finally {
+      setDepositLoading(false);
     }
   };
 
@@ -121,11 +221,19 @@ export default function DepositsPage() {
     }
   }, [deposits]);
 
+  useEffect(() => {
+    if (userWallets.length > 0) {
+      const currencies = [
+        ...new Set(userWallets.map((wallet) => wallet.currency)),
+      ];
+      fetchCryptoPrices(currencies);
+    }
+  }, [userWallets]);
+
   // Filter deposits based on search and filters
   useEffect(() => {
     let filtered = deposits;
 
-    // Filter by search term
     if (searchTerm) {
       filtered = filtered.filter(
         (deposit) =>
@@ -139,14 +247,12 @@ export default function DepositsPage() {
       );
     }
 
-    // Filter by wallet
     if (selectedWallet !== "all") {
       filtered = filtered.filter(
         (deposit) => deposit.walletId === selectedWallet
       );
     }
 
-    // Filter by date range
     if (dateRange !== "all") {
       const now = new Date();
       const startDate = new Date();
@@ -225,7 +331,127 @@ export default function DepositsPage() {
               </p>
             </div>
           </div>
+          <button
+            onClick={() => setShowDepositForm(true)}
+            className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            <Plus className="h-5 w-5 mr-2" />
+            New Deposit
+          </button>
         </div>
+
+        {/* Deposit Form Modal */}
+        {showDepositForm && (
+          <div className="fixed inset-0 bg-black/10 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl max-w-md w-full p-6">
+              <h3 className="text-xl font-semibold text-gray-900 mb-4">
+                Make a Deposit
+              </h3>
+
+              <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <div className="flex">
+                  <AlertCircle className="h-5 w-5 text-yellow-600 mr-2 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-yellow-800 font-medium">
+                      Minimum Deposit Required
+                    </p>
+                    <p className="text-sm text-yellow-700 mt-1">
+                      The minimum deposit amount is ${MINIMUM_DEPOSIT_USD} USD
+                      equivalent.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <form onSubmit={handleDeposit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Wallet
+                  </label>
+                  <select
+                    value={selectedDepositWallet}
+                    onChange={(e) => setSelectedDepositWallet(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                    required
+                  >
+                    <option value="">Choose wallet...</option>
+                    {userWallets.map((wallet) => (
+                      <option key={wallet.id} value={wallet.id}>
+                        {wallet.name} ({wallet.currency.toUpperCase()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Amount
+                    {selectedDepositWallet && (
+                      <span className="text-gray-500 ml-2">
+                        (Minimum: ${MINIMUM_DEPOSIT_USD} USD)
+                      </span>
+                    )}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.000001"
+                    value={depositAmount}
+                    onChange={(e) => setDepositAmount(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-black"
+                    placeholder="Enter amount..."
+                    required
+                  />
+                  {selectedDepositWallet && depositAmount && cryptoPrices && (
+                    <p className="text-sm text-gray-600 mt-1">
+                      ≈ $
+                      {(
+                        parseFloat(depositAmount) *
+                        (cryptoPrices[
+                          userWallets.find(
+                            (w) => w.id === selectedDepositWallet
+                          )?.currency || ""
+                        ]?.usd || 0)
+                      ).toFixed(2)}{" "}
+                      USD
+                    </p>
+                  )}
+                </div>
+
+                {depositError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-600">{depositError}</p>
+                  </div>
+                )}
+
+                <div className="flex space-x-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowDepositForm(false);
+                      setDepositError("");
+                      setDepositAmount("");
+                      setSelectedDepositWallet("");
+                    }}
+                    className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={depositLoading}
+                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                  >
+                    {depositLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      "Deposit"
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
@@ -239,7 +465,7 @@ export default function DepositsPage() {
                   Total Deposits (USD)
                 </p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {pricesLoading ? (
+                  {pricesLoading && deposits.length > 0 ? (
                     <Loader2 className="h-6 w-6 animate-spin" />
                   ) : (
                     `$${totalUsdValue.toLocaleString("en-US", {
@@ -294,7 +520,7 @@ export default function DepositsPage() {
                 placeholder="Search deposits..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 text-black py-2  border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-full pl-10 pr-4 text-black py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
 
