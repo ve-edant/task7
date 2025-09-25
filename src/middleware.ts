@@ -16,6 +16,7 @@ const isPublicRoute = createRouteMatcher([
   '/referral/sign-up(.*)',
   '/api/referrals/validate',
   '/api/check-user',
+  '/admin/login'
 ]);
 
 export default clerkMiddleware(async (auth, req: NextRequest) => {
@@ -45,12 +46,6 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
     }
 
     return NextResponse.next();
-  }
-
-  // ✅ Protect private routes
-  if (isProtectedRoute(req) && !userId) {
-    url.pathname = '/sign-in';
-    return NextResponse.redirect(url);
   }
 
   return NextResponse.next();

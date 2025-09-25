@@ -24,6 +24,7 @@ model User {
   clerkUserId       String     @unique
   firstName         String?
   imageUrl          String?
+  reffered          String?
   isAdmin           Boolean    @default(false)
   lastName          String?
   referralsReceived Referral[] @relation("ReferralsReceived")

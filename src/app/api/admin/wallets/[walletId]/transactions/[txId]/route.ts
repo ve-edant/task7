@@ -1,3 +1,4 @@
+//app/api/admin/wallets/[walletId]/transactions/[txId]/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
