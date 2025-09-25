@@ -32,6 +32,11 @@ interface Transaction {
   amount: number;
   createdAt: string;
   walletId: string;
+  wallet?: {
+    id: string;
+    name: string;
+    currency: string;
+  };
 }
 
 interface UserProfile {
@@ -52,6 +57,12 @@ interface CryptoPrice {
   };
 }
 
+interface DailyInterest {
+  date: string;
+  totalInterestAmount: number;
+  totalUsdValue: number;
+}
+
 export default function UserDashboard() {
   const { user: clerkUser, isLoaded: isClerkLoaded, isSignedIn } = useUser();
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
@@ -60,31 +71,34 @@ export default function UserDashboard() {
   const [pricesLoading, setPricesLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Interest calculation settings (same as income page)
+  const DAILY_INTEREST_RATE = 0.001; // 0.1% daily interest
+  const MIN_BALANCE_FOR_INTEREST = 0.0001; // Minimum balance to earn interest
+  const DEFAULT_CALCULATION_DAYS = 30; // Default to 30 days for dashboard
+
   // Handle referral code and user creation
   useEffect(() => {
-    // Only run when Clerk is loaded and user is signed in
     if (!isClerkLoaded || !isSignedIn) return;
-
+    
     const handleUserSetup = async () => {
       try {
         const ref = localStorage.getItem("referralCode");
         console.log("Referral code from localStorage:", ref);
-
         if (ref) {
           await fetch("/api/check-user", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ referralCode: ref }),
           });
-          localStorage.removeItem("referralCode"); // cleanup
+          localStorage.removeItem("referralCode");
         } else {
-          await fetch("/api/check-user", { method: "POST" }); // ensure user is in DB
+          await fetch("/api/check-user", { method: "POST" });
         }
       } catch (error) {
         console.error("Error in user setup:", error);
       }
     };
-
+    
     handleUserSetup();
   }, [isClerkLoaded, isSignedIn]);
 
@@ -93,13 +107,11 @@ export default function UserDashboard() {
     try {
       setError(null);
       const response = await fetch("/api/users/profile");
-
       if (!response.ok) {
         throw new Error(
           `Failed to fetch profile: ${response.status} ${response.statusText}`
         );
       }
-
       const data = await response.json();
       setUserProfile(data.user);
     } catch (error) {
@@ -118,7 +130,6 @@ export default function UserDashboard() {
       setPricesLoading(false);
       return;
     }
-
     try {
       const uniqueCurrencies = [...new Set(currencies)];
       const response = await fetch(
@@ -126,7 +137,6 @@ export default function UserDashboard() {
           ","
         )}&vs_currencies=usd`
       );
-
       if (!response.ok) throw new Error("Failed to fetch crypto prices");
       const prices = await response.json();
       setCryptoPrices(prices);
@@ -137,25 +147,64 @@ export default function UserDashboard() {
     }
   };
 
-  // Fetch profile when Clerk user is ready
-  useEffect(() => {
-    if (isClerkLoaded && isSignedIn && clerkUser) {
-      fetchUserProfile();
-    } else if (isClerkLoaded && !isSignedIn) {
-      setLoading(false);
-      setError("User not signed in");
-    }
-  }, [isClerkLoaded, isSignedIn, clerkUser]);
+  // Calculate theoretical daily interest (same logic as income page)
+  const calculateTheoreticalInterest = (wallets: Wallet[]) => {
+    if (!wallets || wallets.length === 0) return 0;
+    
+    const today = new Date();
+    let totalInterestUsd = 0;
 
-  // Fetch crypto prices when profile is loaded
-  useEffect(() => {
-    if (userProfile?.wallets) {
-      const currencies = userProfile.wallets.map((wallet) => wallet.currency);
-      fetchCryptoPrices(currencies);
-    }
-  }, [userProfile]);
+    // Calculate interest for the last 30 days
+    for (let i = 0; i < DEFAULT_CALCULATION_DAYS; i++) {
+      const currentDate = new Date(today);
+      currentDate.setDate(today.getDate() - i);
 
-  // Calculate totals
+      wallets.forEach(wallet => {
+        if (wallet.balance >= MIN_BALANCE_FOR_INTEREST) {
+          // Check if wallet existed on this date
+          const walletCreatedDate = new Date(wallet.createdAt);
+          if (currentDate >= walletCreatedDate) {
+            const dailyInterest = wallet.balance * DAILY_INTEREST_RATE;
+            const price = cryptoPrices[wallet.currency]?.usd || 0;
+            const usdValue = dailyInterest * price;
+            totalInterestUsd += usdValue;
+          }
+        }
+      });
+    }
+
+    return totalInterestUsd;
+  };
+
+  // Calculate referral income (exact same logic as referrals page)
+  const calculateReferralIncome = (transactions: Transaction[]) => {
+    if (!transactions) return 0;
+    
+    const referralBonuses = transactions.filter(tx => tx.type === "REFERRAL_BONUS");
+    
+    return referralBonuses.reduce((sum, tx) => {
+      const wallet = userProfile?.wallets.find(w => w.id === tx.walletId);
+      const currency = wallet?.currency || tx.wallet?.currency;
+      const price = currency ? cryptoPrices[currency]?.usd || 0 : 0;
+      return sum + tx.amount * price;
+    }, 0);
+  };
+
+  // Calculate admin adjustments
+  const calculateAdminAdjustments = (transactions: Transaction[]) => {
+    if (!transactions) return 0;
+    
+    return transactions
+      .filter(tx => tx.type === "ADMIN_ADJUSTMENT")
+      .reduce((sum, tx) => {
+        const wallet = userProfile?.wallets.find(w => w.id === tx.walletId);
+        const currency = wallet?.currency || tx.wallet?.currency;
+        const price = currency ? cryptoPrices[currency]?.usd || 0 : 0;
+        return sum + tx.amount * price;
+      }, 0);
+  };
+
+  // Calculate totals with enhanced income logic
   const calculateTotals = () => {
     if (!userProfile || !userProfile.wallets || pricesLoading) {
       return {
@@ -163,6 +212,9 @@ export default function UserDashboard() {
         totalDeposits: 0,
         totalWithdrawals: 0,
         totalIncome: 0,
+        theoreticalInterest: 0,
+        referralIncome: 0,
+        adminAdjustments: 0,
       };
     }
 
@@ -189,21 +241,52 @@ export default function UserDashboard() {
         return sum + tx.amount * price;
       }, 0);
 
-    const totalIncome = transactions
-      .filter((tx) => ["REFERRAL_BONUS", "INTEREST"].includes(tx.type))
-      .reduce((sum, tx) => {
-        const wallet = userProfile.wallets.find((w) => w.id === tx.walletId);
-        const price = wallet ? cryptoPrices[wallet.currency]?.usd || 0 : 0;
-        return sum + tx.amount * price;
-      }, 0);
+    // Enhanced income calculation (same as income page)
+    const theoreticalInterest = calculateTheoreticalInterest(userProfile.wallets);
+    const referralIncome = calculateReferralIncome(transactions);
+    const adminAdjustments = calculateAdminAdjustments(transactions);
+    const totalIncome = theoreticalInterest + referralIncome + adminAdjustments;
 
-    return { totalBalance, totalDeposits, totalWithdrawals, totalIncome };
+    return { 
+      totalBalance, 
+      totalDeposits, 
+      totalWithdrawals, 
+      totalIncome,
+      theoreticalInterest,
+      referralIncome,
+      adminAdjustments,
+    };
   };
 
-  const { totalBalance, totalDeposits, totalWithdrawals, totalIncome } =
-    calculateTotals();
+  // Fetch profile when Clerk user is ready
+  useEffect(() => {
+    if (isClerkLoaded && isSignedIn && clerkUser) {
+      fetchUserProfile();
+    } else if (isClerkLoaded && !isSignedIn) {
+      setLoading(false);
+      setError("User not signed in");
+    }
+  }, [isClerkLoaded, isSignedIn, clerkUser]);
 
-  // Loading state - wait for both Clerk and profile data
+  // Fetch crypto prices when profile is loaded
+  useEffect(() => {
+    if (userProfile?.wallets) {
+      const currencies = userProfile.wallets.map((wallet) => wallet.currency);
+      fetchCryptoPrices(currencies);
+    }
+  }, [userProfile]);
+
+  const { 
+    totalBalance, 
+    totalDeposits, 
+    totalWithdrawals, 
+    totalIncome,
+    theoreticalInterest,
+    referralIncome,
+    adminAdjustments,
+  } = calculateTotals();
+
+  // Loading state
   if (!isClerkLoaded || loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -282,6 +365,21 @@ export default function UserDashboard() {
           <p className="text-gray-600 mt-2">Here's your financial overview</p>
         </div>
 
+        {/* Enhanced Income Info */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+          <div className="flex items-center">
+            <TrendingUp className="h-5 w-5 text-blue-600 mr-2" />
+            <div>
+              <p className="text-sm font-medium text-blue-800">
+                Income includes theoretical daily interest ({(DAILY_INTEREST_RATE * 100).toFixed(1)}% daily on eligible balances) + actual referral bonuses
+              </p>
+              <p className="text-xs text-blue-600 mt-1">
+                Interest calculated for last {DEFAULT_CALCULATION_DAYS} days • Minimum balance: {MIN_BALANCE_FOR_INTEREST} tokens
+              </p>
+            </div>
+          </div>
+        </div>
+
         {/* Dashboard Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
           {/* Wallets Card */}
@@ -298,7 +396,6 @@ export default function UserDashboard() {
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Balance</span>
@@ -336,7 +433,6 @@ export default function UserDashboard() {
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Deposited</span>
@@ -362,7 +458,7 @@ export default function UserDashboard() {
             </div>
           </Link>
 
-          {/* Total Income Card */}
+          {/* Enhanced Total Income Card */}
           <Link href="/dashboard/income" className="group">
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow duration-200">
               <div className="flex items-center justify-between mb-4">
@@ -376,10 +472,9 @@ export default function UserDashboard() {
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Earnings</span>
+                  <span className="text-sm text-gray-600">Total Earnings</span>
                   <span className="font-medium text-purple-600">
                     {pricesLoading ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -391,9 +486,27 @@ export default function UserDashboard() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Sources</span>
-                  <span className="font-medium text-black">
-                    Referrals & Interest
+                  <span className="text-sm text-gray-600">Referrals</span>
+                  <span className="font-medium text-blue-600">
+                    {pricesLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      `$${referralIncome.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })}`
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">Interest (30d)</span>
+                  <span className="font-medium text-green-600">
+                    {pricesLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      `$${theoreticalInterest.toLocaleString("en-US", {
+                        maximumFractionDigits: 2,
+                      })}`
+                    )}
                   </span>
                 </div>
               </div>
@@ -414,7 +527,6 @@ export default function UserDashboard() {
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Withdrawn</span>
@@ -454,7 +566,6 @@ export default function UserDashboard() {
                 </div>
                 <ArrowRight className="h-5 w-5 text-gray-400 group-hover:text-gray-600 transition-colors" />
               </div>
-
               <div className="space-y-2">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Referred Users</span>
@@ -486,11 +597,9 @@ export default function UserDashboard() {
                   const wallet = userProfile.wallets.find(
                     (w) => w.id === transaction.walletId
                   );
-                  const price = wallet
-                    ? cryptoPrices[wallet.currency]?.usd || 0
-                    : 0;
+                  const currency = wallet?.currency || transaction.wallet?.currency;
+                  const price = currency ? cryptoPrices[currency]?.usd || 0 : 0;
                   const usdValue = transaction.amount * price;
-
                   return (
                     <div
                       key={transaction.id}
@@ -530,7 +639,7 @@ export default function UserDashboard() {
                       </div>
                       <div className="text-right">
                         <p className="text-sm font-medium text-gray-900">
-                          {transaction.amount} {wallet?.currency?.toUpperCase()}
+                          {transaction.amount} {currency?.toUpperCase()}
                         </p>
                         <p className="text-xs text-gray-500">
                           ${usdValue.toFixed(2)}
@@ -539,7 +648,6 @@ export default function UserDashboard() {
                     </div>
                   );
                 })}
-
               {(!userProfile.totalTransactions ||
                 userProfile.totalTransactions.length === 0) && (
                 <p className="text-gray-500 text-center py-4">
@@ -548,7 +656,7 @@ export default function UserDashboard() {
               )}
             </div>
           </div>
-
+          
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">
               Account Summary
@@ -566,6 +674,12 @@ export default function UserDashboard() {
                 <span className="text-gray-600">Total Wallets</span>
                 <span className="font-medium text-black">
                   {userProfile.wallets.length}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-gray-600">Earning Wallets</span>
+                <span className="font-medium text-green-600">
+                  {userProfile.wallets.filter(w => w.balance >= MIN_BALANCE_FOR_INTEREST).length}
                 </span>
               </div>
               <div className="flex justify-between items-center">

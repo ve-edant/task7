@@ -7,18 +7,26 @@ import {
   Users,
   TrendingUp,
   Calendar,
-  Filter,
   Search,
   Loader2,
   Gift,
+  BarChart3,
+  Clock,
 } from "lucide-react";
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { TransactionType } from "@prisma/client";
+
+interface Wallet {
+  id: string;
+  name: string;
+  balance: number;
+  currency: string; // CoinGecko ID
+  createdAt: string;
+}
 
 interface Transaction {
   id: string;
-  type: TransactionType;
+  type: "DEPOSIT" | "WITHDRAWAL" | "REFERRAL_BONUS" | "INTEREST" | "ADMIN_ADJUSTMENT";
   amount: number;
   createdAt: string;
   walletId: string;
@@ -29,78 +37,224 @@ interface Transaction {
   };
 }
 
+interface DailyInterest {
+  date: string;
+  dateFormatted: string;
+  totalInterestAmount: number;
+  totalUsdValue: number;
+  walletBreakdown: {
+    [walletId: string]: {
+      name: string;
+      currency: string;
+      interest: number;
+      usdValue: number;
+      balance: number;
+    };
+  };
+}
+
 interface CryptoPrice {
   [key: string]: {
     usd: number;
   };
 }
 
-export default function IncomePage() {
+interface ReferralSummary {
+  totalCount: number;
+  totalUsdValue: number;
+  currencyBreakdown: {
+    [currency: string]: {
+      amount: number;
+      usdValue: number;
+    };
+  };
+}
+
+export default function EnhancedIncomePage() {
   const { user } = useUser();
-  const [incomeTransactions, setIncomeTransactions] = useState<Transaction[]>(
-    []
-  );
-  const [filteredTransactions, setFilteredTransactions] = useState<
-    Transaction[]
-  >([]);
+  const [wallets, setWallets] = useState<Wallet[]>([]);
+  const [incomeTransactions, setIncomeTransactions] = useState<Transaction[]>([]);
+  const [dailyInterestData, setDailyInterestData] = useState<DailyInterest[]>([]);
+  const [referralSummary, setReferralSummary] = useState<ReferralSummary>({
+    totalCount: 0,
+    totalUsdValue: 0,
+    currencyBreakdown: {}
+  });
   const [cryptoPrices, setCryptoPrices] = useState<CryptoPrice>({});
   const [loading, setLoading] = useState(true);
   const [pricesLoading, setPricesLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedWallet, setSelectedWallet] = useState("all");
-  const [incomeType, setIncomeType] = useState("all");
-  const [dateRange, setDateRange] = useState("all");
+  const [dateRange, setDateRange] = useState("30d");
+
+  // Interest calculation settings
+  const DAILY_INTEREST_RATE = 0.001; // 0.1% daily interest
+  const MIN_BALANCE_FOR_INTEREST = 0.0001; // Minimum balance to earn interest
 
   const fetchUserProfile = async () => {
     try {
       const response = await fetch("/api/users/profile");
-      if (!response.ok) throw new Error("Failed to fetch profile");
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("API Error Response:", errorText);
+        throw new Error(`Failed to fetch profile: ${response.status}`);
+      }
+      
       const data = await response.json();
+      console.log("Fetched user data:", data);
 
-      // Extract all income transactions (REFERRAL_BONUS and INTEREST)
-      const allIncomeTransactions = data.user.wallets
-        .flatMap((wallet: any) =>
-          wallet.transactions
-            .filter(
-              (tx: { type: TransactionType }) =>
-                tx.type === TransactionType.REFERRAL_BONUS ||
-                tx.type === TransactionType.INTEREST ||
-                tx.type === TransactionType.ADMIN_ADJUSTMENT
-            )
-            .map((tx: any) => ({
-              ...tx,
-              wallet: {
-                id: wallet.id,
-                name: wallet.name,
-                currency: wallet.currency,
-              },
-            }))
-        )
-        .sort(
-          (a: any, b: any) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-        );
+      // Handle the actual API response structure
+      const userWallets = data.user?.wallets || [];
+      const existingTransactions = data.user?.totalTransactions || [];
 
-      setIncomeTransactions(allIncomeTransactions);
-      setFilteredTransactions(allIncomeTransactions);
+      console.log("Extracted wallets:", userWallets);
+      console.log("Extracted transactions:", existingTransactions);
+
+      setWallets(userWallets);
+      
+      // Filter for income transactions
+      const incomeTransactions = existingTransactions.filter((tx: any) => 
+        tx.type === "REFERRAL_BONUS" || 
+        tx.type === "INTEREST" || 
+        tx.type === "ADMIN_ADJUSTMENT"
+      );
+      
+      console.log("Income transactions found:", incomeTransactions);
+      setIncomeTransactions(incomeTransactions);
+
     } catch (error) {
-      console.error("Error fetching income transactions:", error);
+      console.error("Error fetching user profile:", error);
+      
+      // Show user-friendly error message
+      if (error instanceof Error) {
+        console.error("Error details:", error.message);
+      }
+      
+      // Set empty data as fallback
+      setWallets([]);
+      setIncomeTransactions([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchCryptoPrices = async (currencies: string[]) => {
-    if (currencies.length === 0) {
-      setPricesLoading(false); // 👈 stop spinner if no currencies
+  // Calculate theoretical daily interest based on wallet balances
+  const calculateDailyInterest = (wallets: Wallet[]) => {
+    const today = new Date();
+    const dailyData: { [date: string]: DailyInterest } = {};
+
+    // Get date range for calculation
+    let daysToCalculate = 30;
+    switch (dateRange) {
+      case "7d":
+        daysToCalculate = 7;
+        break;
+      case "30d":
+        daysToCalculate = 30;
+        break;
+      case "90d":
+        daysToCalculate = 90;
+        break;
+      case "all":
+        daysToCalculate = 365; // Max 1 year
+        break;
+    }
+
+    // Calculate interest for each day
+    for (let i = 0; i < daysToCalculate; i++) {
+      const currentDate = new Date(today);
+      currentDate.setDate(today.getDate() - i);
+      const dateKey = currentDate.toISOString().split('T')[0];
+      const dateFormatted = currentDate.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+
+      dailyData[dateKey] = {
+        date: dateKey,
+        dateFormatted,
+        totalInterestAmount: 0,
+        totalUsdValue: 0,
+        walletBreakdown: {}
+      };
+
+      // Calculate interest for each wallet
+      wallets.forEach(wallet => {
+        if (wallet.balance >= MIN_BALANCE_FOR_INTEREST) {
+          // Check if wallet existed on this date
+          const walletCreatedDate = new Date(wallet.createdAt);
+          if (currentDate >= walletCreatedDate) {
+            const dailyInterest = wallet.balance * DAILY_INTEREST_RATE;
+            const price = cryptoPrices[wallet.currency]?.usd || 0;
+            const usdValue = dailyInterest * price;
+
+            dailyData[dateKey].totalInterestAmount += dailyInterest;
+            dailyData[dateKey].totalUsdValue += usdValue;
+
+            dailyData[dateKey].walletBreakdown[wallet.id] = {
+              name: wallet.name,
+              currency: wallet.currency,
+              interest: dailyInterest,
+              usdValue: usdValue,
+              balance: wallet.balance
+            };
+          }
+        }
+      });
+    }
+
+    // Filter out days with no interest and sort by date (newest first)
+    const sortedData = Object.values(dailyData)
+      .filter(day => day.totalInterestAmount > 0)
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    setDailyInterestData(sortedData);
+  };
+
+  // Calculate referral summary from existing referral transactions
+  const generateReferralSummary = (transactions: Transaction[]) => {
+    const referralTransactions = transactions.filter(tx => tx.type === "REFERRAL_BONUS");
+    
+    const summary: ReferralSummary = {
+      totalCount: referralTransactions.length,
+      totalUsdValue: 0,
+      currencyBreakdown: {}
+    };
+
+    referralTransactions.forEach(tx => {
+      const currency = tx.wallet.currency;
+      const price = cryptoPrices[currency]?.usd || 0;
+      const usdValue = tx.amount * price;
+
+      summary.totalUsdValue += usdValue;
+
+      if (!summary.currencyBreakdown[currency]) {
+        summary.currencyBreakdown[currency] = {
+          amount: 0,
+          usdValue: 0
+        };
+      }
+
+      summary.currencyBreakdown[currency].amount += tx.amount;
+      summary.currencyBreakdown[currency].usdValue += usdValue;
+    });
+
+    setReferralSummary(summary);
+  };
+
+  // Fetch crypto prices using CoinGecko IDs
+  const fetchCryptoPrices = async (geckoIds: string[]) => {
+    if (geckoIds.length === 0) {
+      setPricesLoading(false);
       return;
     }
 
-    setPricesLoading(true); // 👈 start spinner only during fetch
+    setPricesLoading(true);
     try {
-      const uniqueCurrencies = [...new Set(currencies)];
+      const uniqueIds = [...new Set(geckoIds)];
       const response = await fetch(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${uniqueCurrencies.join(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${uniqueIds.join(
           ","
         )}&vs_currencies=usd`
       );
@@ -111,20 +265,9 @@ export default function IncomePage() {
     } catch (error) {
       console.error("Error fetching crypto prices:", error);
     } finally {
-      setPricesLoading(false); // 👈 always stop spinner
+      setPricesLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (incomeTransactions.length > 0) {
-      const currencies = [
-        ...new Set(incomeTransactions.map((tx) => tx.wallet.currency)),
-      ];
-      fetchCryptoPrices(currencies);
-    } else {
-      setPricesLoading(false); // 👈 stop spinner if no income transactions
-    }
-  }, [incomeTransactions]);
 
   useEffect(() => {
     if (user) {
@@ -132,100 +275,49 @@ export default function IncomePage() {
     }
   }, [user]);
 
-  // Filter transactions based on search and filters
   useEffect(() => {
-    let filtered = incomeTransactions;
-
-    // Filter by search term
-    if (searchTerm) {
-      filtered = filtered.filter(
-        (tx) =>
-          tx.wallet.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          tx.wallet.currency.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          tx.id.toLowerCase().includes(searchTerm.toLowerCase())
-      );
+    if (wallets.length > 0) {
+      const currencies = [...new Set(wallets.map(wallet => wallet.currency))];
+      fetchCryptoPrices(currencies);
+    } else {
+      setPricesLoading(false);
     }
+  }, [wallets]);
 
-    // Filter by wallet
-    if (selectedWallet !== "all") {
-      filtered = filtered.filter((tx) => tx.walletId === selectedWallet);
+  useEffect(() => {
+    if (wallets.length > 0 && !pricesLoading) {
+      calculateDailyInterest(wallets);
+      generateReferralSummary(incomeTransactions);
     }
-
-    // Filter by income type
-    if (incomeType !== "all") {
-      filtered = filtered.filter((tx) => tx.type === incomeType);
-    }
-
-    // Filter by date range
-    if (dateRange !== "all") {
-      const now = new Date();
-      const startDate = new Date();
-
-      switch (dateRange) {
-        case "7d":
-          startDate.setDate(now.getDate() - 7);
-          break;
-        case "30d":
-          startDate.setDate(now.getDate() - 30);
-          break;
-        case "90d":
-          startDate.setDate(now.getDate() - 90);
-          break;
-      }
-
-      filtered = filtered.filter((tx) => new Date(tx.createdAt) >= startDate);
-    }
-
-    setFilteredTransactions(filtered);
-  }, [incomeTransactions, searchTerm, selectedWallet, incomeType, dateRange]);
+  }, [wallets, cryptoPrices, pricesLoading, dateRange]);
 
   const calculateTotalStats = () => {
-    const totalUsdValue = filteredTransactions.reduce((sum, tx) => {
-      const price = cryptoPrices[tx.wallet.currency]?.usd || 0;
-      return sum + tx.amount * price;
-    }, 0);
-
-    const referralBonusUsd = filteredTransactions
-      .filter((tx) => tx.type === "REFERRAL_BONUS")
+    // Calculate theoretical total interest earned
+    const totalInterestUsd = dailyInterestData.reduce((sum, day) => sum + day.totalUsdValue, 0);
+    
+    // Calculate actual referral income
+    const referralBonusUsd = incomeTransactions
+      .filter(tx => tx.type === "REFERRAL_BONUS")
       .reduce((sum, tx) => {
         const price = cryptoPrices[tx.wallet.currency]?.usd || 0;
         return sum + tx.amount * price;
       }, 0);
 
-    const interestUsd = filteredTransactions
-      .filter((tx) => tx.type === "INTEREST")
+    // Calculate admin adjustments
+    const adminAdjustmentUsd = incomeTransactions
+      .filter(tx => tx.type === "ADMIN_ADJUSTMENT")
       .reduce((sum, tx) => {
         const price = cryptoPrices[tx.wallet.currency]?.usd || 0;
         return sum + tx.amount * price;
       }, 0);
 
-    const adminAdjustmentUsd = filteredTransactions
-      .filter((tx) => tx.type === "ADMIN_ADJUSTMENT")
-      .reduce((sum, tx) => {
-        const price = cryptoPrices[tx.wallet.currency]?.usd || 0;
-        return sum + tx.amount * price;
-      }, 0);
-
-    const groupedByCurrency = filteredTransactions.reduce((acc, tx) => {
-      const currency = tx.wallet.currency;
-      if (!acc[currency]) {
-        acc[currency] = { total: 0, referral: 0, interest: 0, admin: 0 };
-      }
-      acc[currency].total += tx.amount;
-
-      if (tx.type === "REFERRAL_BONUS") acc[currency].referral += tx.amount;
-      if (tx.type === "INTEREST") acc[currency].interest += tx.amount;
-      if (tx.type === "ADMIN_ADJUSTMENT") acc[currency].admin += tx.amount;
-
-      return acc;
-    }, {} as Record<string, { total: number; referral: number; interest: number; admin: number }>);
+    const totalUsdValue = totalInterestUsd + referralBonusUsd + adminAdjustmentUsd;
 
     return {
       totalUsdValue,
       referralBonusUsd,
-      interestUsd,
+      interestUsd: totalInterestUsd,
       adminAdjustmentUsd,
-      groupedByCurrency,
     };
   };
 
@@ -234,48 +326,21 @@ export default function IncomePage() {
     referralBonusUsd,
     interestUsd,
     adminAdjustmentUsd,
-    groupedByCurrency,
   } = calculateTotalStats();
-  const uniqueWallets = [
-    ...new Set(
-      incomeTransactions.map((tx) => ({
-        id: tx.walletId,
-        name: tx.wallet.name,
-      }))
-    ),
-  ];
 
-  const getTransactionIcon = (type: string) => {
-    switch (type) {
-      case "REFERRAL_BONUS":
-        return <Users className="h-5 w-5 text-blue-600" />;
-      case "INTEREST":
-        return <TrendingUp className="h-5 w-5 text-green-600" />;
-      case "ADMIN_ADJUSTMENT":
-        return <Gift className="h-5 w-5 text-purple-600" />;
-      default:
-        return <DollarSign className="h-5 w-5 text-gray-600" />;
-    }
-  };
-
-  const getTransactionColor = (type: string) => {
-    switch (type) {
-      case "REFERRAL_BONUS":
-        return "bg-blue-100";
-      case "INTEREST":
-        return "bg-green-100";
-      case "ADMIN_ADJUSTMENT":
-        return "bg-purple-100";
-      default:
-        return "bg-gray-100";
-    }
-  };
-
-  const formatTransactionType = (type: string) => {
-    return type
-      .replace("_", " ")
-      .toLowerCase()
-      .replace(/\b\w/g, (l) => l.toUpperCase());
+  const getCurrencySymbol = (geckoId: string) => {
+    const symbolMap: { [key: string]: string } = {
+      bitcoin: "BTC",
+      ethereum: "ETH",
+      "binancecoin": "BNB",
+      cardano: "ADA",
+      solana: "SOL",
+      "polygon-ecosystem-token": "POL",
+      avalanche: "AVAX",
+      "chainlink": "LINK",
+      usd: "USD",
+    };
+    return symbolMap[geckoId] || geckoId.toUpperCase();
   };
 
   if (loading) {
@@ -299,9 +364,24 @@ export default function IncomePage() {
               <ArrowLeft className="h-6 w-6 text-gray-600 hover:text-gray-900" />
             </Link>
             <div>
-              <h1 className="text-3xl font-bold text-gray-900">Income</h1>
+              <h1 className="text-3xl font-bold text-gray-900">Income Dashboard</h1>
               <p className="text-gray-600 mt-1">
-                Track your referral bonuses and interest earnings
+                Track your theoretical daily interest earnings ({(DAILY_INTEREST_RATE * 100).toFixed(1)}% daily) and referral bonuses
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Interest Rate Info */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+          <div className="flex items-center">
+            <TrendingUp className="h-5 w-5 text-blue-600 mr-2" />
+            <div>
+              <p className="text-sm font-medium text-blue-800">
+                Interest Calculation: {(DAILY_INTEREST_RATE * 100).toFixed(1)}% daily rate applied to wallet balances
+              </p>
+              <p className="text-xs text-blue-600 mt-1">
+                Minimum balance for interest: {MIN_BALANCE_FOR_INTEREST} tokens • Calculated based on current wallet balances
               </p>
             </div>
           </div>
@@ -338,7 +418,7 @@ export default function IncomePage() {
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">
-                  Referral Bonuses
+                  Referral Income
                 </p>
                 <p className="text-2xl font-bold text-blue-600">
                   {pricesLoading ? (
@@ -348,6 +428,9 @@ export default function IncomePage() {
                       maximumFractionDigits: 2,
                     })}`
                   )}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {referralSummary.totalCount} referrals
                 </p>
               </div>
             </div>
@@ -360,7 +443,7 @@ export default function IncomePage() {
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">
-                  Interest Earned
+                  Theoretical Interest
                 </p>
                 <p className="text-2xl font-bold text-green-600">
                   {pricesLoading ? (
@@ -370,6 +453,9 @@ export default function IncomePage() {
                       maximumFractionDigits: 2,
                     })}`
                   )}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {dailyInterestData.length} earning days
                 </p>
               </div>
             </div>
@@ -382,83 +468,163 @@ export default function IncomePage() {
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">
-                  Total Transactions
+                  Active Wallets
                 </p>
                 <p className="text-2xl font-bold text-gray-900">
-                  {filteredTransactions.length}
+                  {wallets.filter(w => w.balance >= MIN_BALANCE_FOR_INTEREST).length}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  of {wallets.length} total
                 </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Filters */}
+        {/* Date Range Filter */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
-              <input
-                type="text"
-                placeholder="Search income..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-2 text-black border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-            </div>
-
-            <select
-              value={selectedWallet}
-              onChange={(e) => setSelectedWallet(e.target.value)}
-              className="px-4 py-2 border text-black border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="all">All Wallets</option>
-              {uniqueWallets.map((wallet) => (
-                <option key={wallet.id} value={wallet.id}>
-                  {wallet.name}
-                </option>
-              ))}
-            </select>
-
-            <select
-              value={incomeType}
-              onChange={(e) => setIncomeType(e.target.value)}
-              className="px-4 py-2 border text-black border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="all">All Income Types</option>
-              <option value="REFERRAL_BONUS">Referral Bonuses</option>
-              <option value="INTEREST">Interest</option>
-              <option value="ADMIN_ADJUSTMENT">Admin Adjustments</option>
-            </select>
-
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold text-gray-900">Date Range</h3>
             <select
               value={dateRange}
               onChange={(e) => setDateRange(e.target.value)}
               className="px-4 py-2 border text-black border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
-              <option value="all">All Time</option>
               <option value="7d">Last 7 Days</option>
               <option value="30d">Last 30 Days</option>
               <option value="90d">Last 90 Days</option>
+              <option value="all">All Time (Max 1 Year)</option>
             </select>
           </div>
         </div>
 
-        {/* Currency Breakdown */}
-        {Object.keys(groupedByCurrency).length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              Income by Currency
+        {/* Daily Interest Earnings Table */}
+        {dailyInterestData.length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center">
+                <Clock className="h-5 w-5 text-green-600 mr-2" />
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Theoretical Daily Interest Earnings
+                </h3>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Date
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Total USD
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Wallet Breakdown
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {dailyInterestData.slice(0, 20).map((day) => (
+                    <tr key={day.date} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {day.dateFormatted}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <span className="text-green-600 font-semibold">
+                          ${day.totalUsdValue.toFixed(4)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900">
+                        <div className="space-y-1">
+                          {Object.entries(day.walletBreakdown).map(([walletId, breakdown]) => (
+                            <div key={walletId} className="flex items-center justify-between">
+                              <span className="text-xs text-gray-600">
+                                {breakdown.name}
+                              </span>
+                              <div className="flex items-center space-x-2">
+                                <span className="text-xs font-medium">
+                                  {breakdown.interest.toFixed(8)} {getCurrencySymbol(breakdown.currency)}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                  (${breakdown.usdValue.toFixed(4)})
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Current Wallet Balances */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mb-8">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-lg font-semibold text-gray-900">
+              Current Wallet Balances (Interest Earning)
             </h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.entries(groupedByCurrency).map(([currency, amounts]) => {
-                const price = cryptoPrices[currency]?.usd || 0;
-                const totalUsdValue = amounts.total * price;
+          </div>
+          <div className="divide-y divide-gray-200">
+            {wallets
+              .filter(wallet => wallet.balance >= MIN_BALANCE_FOR_INTEREST)
+              .map((wallet) => {
+                const price = cryptoPrices[wallet.currency]?.usd || 0;
+                const usdValue = wallet.balance * price;
+                const dailyInterest = wallet.balance * DAILY_INTEREST_RATE;
+                const dailyInterestUsd = dailyInterest * price;
 
                 return (
-                  <div key={currency} className="bg-gray-50 rounded-lg p-4">
+                  <div key={wallet.id} className="px-6 py-4 hover:bg-gray-50">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-900">
+                          {wallet.name}
+                        </h4>
+                        <p className="text-xs text-gray-500">
+                          Created: {new Date(wallet.createdAt).toLocaleDateString()}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-gray-900">
+                          {wallet.balance.toFixed(8)} {getCurrencySymbol(wallet.currency)}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          ≈ ${usdValue.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-green-600">
+                          Daily: +{dailyInterest.toFixed(8)} (${dailyInterestUsd.toFixed(4)})
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+
+        {/* Referral Income Summary */}
+        {Object.keys(referralSummary.currencyBreakdown).length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center mb-4">
+              <Users className="h-5 w-5 text-blue-600 mr-2" />
+              <h3 className="text-lg font-semibold text-gray-900">
+                Referral Income Summary
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {Object.entries(referralSummary.currencyBreakdown).map(([currency, data]) => {
+                const price = cryptoPrices[currency]?.usd || 1;
+
+                return (
+                  <div key={currency} className="bg-blue-50 rounded-lg p-4">
                     <div className="flex justify-between items-center mb-3">
-                      <span className="text-sm font-medium text-gray-900 uppercase">
-                        {currency}
+                      <span className="text-sm font-medium text-gray-900">
+                        {getCurrencySymbol(currency)}
                       </span>
                       <span className="text-sm text-gray-600">
                         {pricesLoading ? (
@@ -470,32 +636,14 @@ export default function IncomePage() {
                     </div>
                     <div className="space-y-2">
                       <div>
-                        <p className="text-lg font-bold text-gray-900">
-                          {amounts.total.toFixed(4)} {currency.toUpperCase()}
+                        <p className="text-lg font-bold text-blue-600">
+                          {data.amount.toFixed(6)} {getCurrencySymbol(currency)}
                         </p>
                         <p className="text-sm text-gray-600">
-                          ≈ $
-                          {totalUsdValue.toLocaleString("en-US", {
+                          ≈ ${data.usdValue.toLocaleString("en-US", {
                             maximumFractionDigits: 2,
                           })}
                         </p>
-                      </div>
-                      <div className="text-xs space-y-1">
-                        {amounts.referral > 0 && (
-                          <p className="text-blue-600">
-                            Referrals: {amounts.referral.toFixed(4)}
-                          </p>
-                        )}
-                        {amounts.interest > 0 && (
-                          <p className="text-green-600">
-                            Interest: {amounts.interest.toFixed(4)}
-                          </p>
-                        )}
-                        {amounts.admin > 0 && (
-                          <p className="text-purple-600">
-                            Admin: {amounts.admin.toFixed(4)}
-                          </p>
-                        )}
                       </div>
                     </div>
                   </div>
@@ -504,94 +652,6 @@ export default function IncomePage() {
             </div>
           </div>
         )}
-
-        {/* Income Transactions List */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-semibold text-gray-900">
-              Income History
-            </h3>
-          </div>
-
-          {filteredTransactions.length === 0 ? (
-            <div className="text-center py-12">
-              <DollarSign className="h-24 w-24 text-gray-300 mx-auto mb-4" />
-              <h3 className="text-xl font-medium text-gray-900 mb-2">
-                No Income Found
-              </h3>
-              <p className="text-gray-600">
-                No income transactions match your current filters.
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-gray-200">
-              {filteredTransactions.map((transaction) => {
-                const price =
-                  cryptoPrices[transaction.wallet.currency]?.usd || 0;
-                const usdValue = transaction.amount * price;
-
-                return (
-                  <div
-                    key={transaction.id}
-                    className="px-6 py-4 hover:bg-gray-50"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center">
-                        <div
-                          className={`p-2 rounded-lg ${getTransactionColor(
-                            transaction.type
-                          )}`}
-                        >
-                          {getTransactionIcon(transaction.type)}
-                        </div>
-                        <div className="ml-4">
-                          <div className="flex items-center space-x-2">
-                            <h4 className="text-sm font-medium text-gray-900">
-                              {formatTransactionType(transaction.type)} -{" "}
-                              {transaction.wallet.name}
-                            </h4>
-                            <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full uppercase">
-                              {transaction.wallet.currency}
-                            </span>
-                          </div>
-                          <p className="text-sm text-gray-600">
-                            {new Date(transaction.createdAt).toLocaleDateString(
-                              "en-US",
-                              {
-                                year: "numeric",
-                                month: "short",
-                                day: "numeric",
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              }
-                            )}
-                          </p>
-                          <p className="text-xs text-gray-400 font-mono">
-                            {transaction.id}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <p className="text-lg font-semibold text-green-600">
-                          +{transaction.amount.toFixed(4)}{" "}
-                          {transaction.wallet.currency.toUpperCase()}
-                        </p>
-                        <p className="text-sm text-gray-600">
-                          {pricesLoading ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            `≈ $${usdValue.toFixed(2)}`
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

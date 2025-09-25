@@ -326,7 +326,7 @@ export default function ReferralsPage() {
               </label>
               {userProfile?.referralCode ? (
                 <div className="flex items-center space-x-2">
-                  <div className="flex-1 px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg font-mono text-lg">
+                  <div className="flex-1 text-black px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg font-mono text-lg">
                     {userProfile.referralCode}
                   </div>
                   <button
@@ -378,7 +378,7 @@ export default function ReferralsPage() {
                 Referral Link
               </label>
               <div className="flex items-center space-x-2">
-                <div className="flex-1 px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg text-sm break-all">
+                <div className="flex-1 text-black px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg text-sm break-all">
                   {`${window.location.origin}/referral/sign-up?ref=${userProfile.referralCode}`}
                 </div>
                 <button
@@ -447,19 +447,19 @@ export default function ReferralsPage() {
             <table className="w-full text-sm border">
               <thead>
                 <tr className="bg-gray-100">
-                  <th className="p-2 text-left">Name</th>
-                  <th className="p-2 text-left">Email</th>
-                  <th className="p-2 text-left">Joined</th>
+                  <th className="p-2 text-black text-left">Name</th>
+                  <th className="p-2 text-black text-left">Email</th>
+                  <th className="p-2 text-black text-left">Joined</th>
                 </tr>
               </thead>
               <tbody>
                 {userProfile?.referralsGiven.map((ref) => (
                   <tr key={ref.id} className="border-t">
-                    <td className="p-2">
+                    <td className="p-2  text-black">
                       {ref.referee.firstName} {ref.referee.lastName}
                     </td>
-                    <td className="p-2">{ref.referee.email}</td>
-                    <td className="p-2">
+                    <td className="p-2 text-black">{ref.referee.email}</td>
+                    <td className="p-2 text-black">
                       {new Date(ref.referee.createdAt).toLocaleDateString()}
                     </td>
                   </tr>
